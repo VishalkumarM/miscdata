@@ -1,0 +1,249 @@
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.loader.Launcher;
+import org.springframework.boot.loader.archive.Archive;
+import org.springframework.boot.loader.archive.JarFileArchive;
+import org.springframework.boot.loader.jar.JarFile;
+import org.springframework.boot.loader.util.DelegatingClassLoader;
+
+import java.io.File;
+import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.List;
+
+public class CustomSpringBootLauncher extends Launcher {
+
+    private final String[] args;
+    private final String externalClasspath;
+    private final String springBootJarPath;
+
+    public CustomSpringBootLauncher(String[] args, String externalClasspath, String springBootJarPath) {
+        this.args = args;
+        this.externalClasspath = externalClasspath;
+        this.springBootJarPath = springBootJarPath;
+    }
+
+    public void launch() throws Exception {
+        // 1. Load external classpath dynamically (add JARs to the classloader)
+        addExternalClasspath(externalClasspath);
+
+        // 2. Prepare and load the Spring Boot application JAR
+        Archive archive = new JarFileArchive(new File(springBootJarPath));
+
+        // 3. Use the loaded classpath to create the appropriate class loader
+        ClassLoader classLoader = createClassLoader(archive);
+        
+        // 4. Use SpringApplication to launch the application
+        SpringApplication application = new SpringApplication(CustomSpringBootLauncher.class);
+        application.setClassLoader(classLoader);
+        application.setWebApplicationType(null); // or appropriate web type (if needed)
+        application.run(args);
+    }
+
+    private void addExternalClasspath(String classpath) throws IOException {
+        File classpathDir = new File(classpath);
+        if (classpathDir.exists() && classpathDir.isDirectory()) {
+            for (File file : classpathDir.listFiles()) {
+                if (file.getName().endsWith(".jar")) {
+                    URL url = file.toURI().toURL();
+                    System.out.println("Adding external JAR to classpath: " + url);
+                    // Dynamically add to classpath using a custom class loader
+                    URLClassLoader classLoader = (URLClassLoader) Thread.currentThread().getContextClassLoader();
+                    // This is a bit of a hack, but adds URL to existing class loader
+                    classLoader.addURL(url);
+                }
+            }
+        }
+    }
+
+    private ClassLoader createClassLoader(Archive archive) throws Exception {
+        // Create a URLClassLoader with the archive as the base classpath and the external libraries
+        List<URL> urls = archive.getUrls();
+        URL[] additionalUrls = new URL[urls.size() + 1];
+        urls.toArray(additionalUrls);
+        return new DelegatingClassLoader(additionalUrls, getClass().getClassLoader());
+    }
+	
+	private void addExternalClasspath(String classpath) throws IOException {
+    File classpathDir = new File(classpath);
+    if (classpathDir.exists()) {
+        // If it's a directory, add all JAR files and class directories
+        if (classpathDir.isDirectory()) {
+            // Add all JAR files in the directory
+            for (File file : classpathDir.listFiles()) {
+                if (file.getName().endsWith(".jar")) {
+                    URL url = file.toURI().toURL();
+                    System.out.println("Adding external JAR to classpath: " + url);
+                    addURLToClassLoader(url);
+                } else if (file.isDirectory()) {
+                    // If it's a subdirectory, add it as a classpath directory
+                    URL url = file.toURI().toURL();
+                    System.out.println("Adding directory to classpath: " + url);
+                    addURLToClassLoader(url);
+                }
+            }
+        } else if (classpathDir.getName().endsWith(".jar")) {
+            // Single JAR file provided
+            URL url = classpathDir.toURI().toURL();
+            System.out.println("Adding external JAR to classpath: " + url);
+            addURLToClassLoader(url);
+        } else {
+            throw new IOException("Provided path is neither a directory nor a JAR file: " + classpath);
+        }
+    } else {
+        throw new FileNotFoundException("Classpath directory or JAR file not found: " + classpath);
+    }
+}
+
+private void addURLToClassLoader(URL url) {
+    // Dynamically add the URL to the current thread's classloader
+    URLClassLoader classLoader = (URLClassLoader) Thread.currentThread().getContextClassLoader();
+    try {
+        // This is a bit of a hack but works for adding URLs to the classloader dynamically
+        // URLClassLoader does not provide an official API for adding URLs at runtime.
+        // Workaround to use reflection to invoke the addURL method
+        java.lang.reflect.Method method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
+        method.setAccessible(true);
+        method.invoke(classLoader, url);
+    } catch (Exception e) {
+        throw new RuntimeException("Failed to add URL to class loader", e);
+    }
+}
+
+
+    public static void main(String[] args) throws Exception {
+        String externalClasspath = args[0]; // Path to external classpath (libs/* or individual jars)
+        String springBootJarPath = args[1]; // Path to the Spring Boot application JAR
+
+        CustomSpringBootLauncher launcher = new CustomSpringBootLauncher(args, externalClasspath, springBootJarPath);
+        launcher.launch();
+    }
+}
+
+
+//Modified Method
+private void addExternalClasspathFromEnv() throws IOException {
+    String classpath = System.getenv("CLASSPATH");
+    
+    if (classpath != null && !classpath.isEmpty()) {
+        // Split the classpath into entries based on the OS-specific separator
+        String separator = System.getProperty("os.name").toLowerCase().contains("win") ? ";" : ":";
+        String[] paths = classpath.split(separator);
+        
+        for (String path : paths) {
+            File file = new File(path);
+            if (file.exists()) {
+                // If it's a directory, add all JAR files and class directories
+                if (file.isDirectory()) {
+                    // Add all JAR files in the directory
+                    for (File innerFile : file.listFiles()) {
+                        if (innerFile.getName().endsWith(".jar")) {
+                            URL url = innerFile.toURI().toURL();
+                            System.out.println("Adding external JAR to classpath: " + url);
+                            addURLToClassLoader(url);
+                        } else if (innerFile.isDirectory()) {
+                            // If it's a subdirectory, add it as a classpath directory
+                            URL url = innerFile.toURI().toURL();
+                            System.out.println("Adding directory to classpath: " + url);
+                            addURLToClassLoader(url);
+                        }
+                    }
+                } else if (file.getName().endsWith(".jar")) {
+                    // If it's a JAR file, add it directly
+                    URL url = file.toURI().toURL();
+                    System.out.println("Adding external JAR to classpath: " + url);
+                    addURLToClassLoader(url);
+                }
+            } else {
+                System.err.println("Path not found in CLASSPATH: " + path);
+            }
+        }
+    } else {
+        System.err.println("CLASSPATH environment variable is not set or empty.");
+    }
+}
+
+private void addURLToClassLoader(URL url) {
+    // Dynamically add the URL to the current thread's classloader
+    URLClassLoader classLoader = (URLClassLoader) Thread.currentThread().getContextClassLoader();
+    try {
+        // This is a bit of a hack but works for adding URLs to the classloader dynamically
+        // URLClassLoader does not provide an official API for adding URLs at runtime.
+        // Workaround to use reflection to invoke the addURL method
+        java.lang.reflect.Method method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
+        method.setAccessible(true);
+        method.invoke(classLoader, url);
+    } catch (Exception e) {
+        throw new RuntimeException("Failed to add URL to class loader", e);
+    }
+}
+
+
+export CLASSPATH=/path/to/libs/*:/path/to/classes:/path/to/other.jar
+java -jar CustomSpringBootLauncher.jar /path/to/spring-boot-application.jar
+
+set CLASSPATH=C:\path\to\libs\*;C:\path\to\classes;C:\path\to\other.jar
+java -jar CustomSpringBootLauncher.jar C:\path\to\spring-boot-application.jar
+
+
+
+import org.springframework.boot.loader.Launcher;
+import org.springframework.boot.loader.archive.Archive;
+import org.springframework.boot.loader.archive.JarFileArchive;
+import org.springframework.boot.loader.util.DelegatingClassLoader;
+
+import java.io.File;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.List;
+
+public class CustomSpringBootLauncher {
+
+    private final String springBootJarPath;
+
+    public CustomSpringBootLauncher(String springBootJarPath) {
+        this.springBootJarPath = springBootJarPath;
+    }
+
+    public void launch() throws Exception {
+        // 1. Load the Spring Boot application JAR
+        Archive archive = new JarFileArchive(new File(springBootJarPath));
+
+        // 2. Create a custom class loader with the external dependencies
+        ClassLoader classLoader = createClassLoader(archive);
+        
+        // 3. Set the Spring Boot application JAR to be launched by the Spring Boot `ExecutableArchiveLauncher`
+        Launcher launcher = new Launcher();
+        launcher.launch(archive, classLoader);
+    }
+
+    private ClassLoader createClassLoader(Archive archive) throws Exception {
+        // Get the Spring Boot archive URLs
+        List<URL> urls = archive.getUrls();
+        URL[] additionalUrls = new URL[urls.size() + 1];
+        urls.toArray(additionalUrls);
+
+        // Combine external classpath URLs with the Spring Boot application classpath
+        return new DelegatingClassLoader(additionalUrls, getClass().getClassLoader());
+    }
+
+    public static void main(String[] args) throws Exception {
+        String springBootJarPath = args[0]; // Path to the Spring Boot application JAR
+
+        CustomSpringBootLauncher launcher = new CustomSpringBootLauncher(springBootJarPath);
+        launcher.launch();
+    }
+}
+
+
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-maven-plugin</artifactId>
+            <configuration>
+                <mainClass>com.example.CustomSpringBootLauncher</mainClass>
+            </configuration>
+        </plugin>
+    </plugins>
+</build>
